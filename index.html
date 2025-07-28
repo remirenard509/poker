@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Outil d'Analyse de Poker</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX transformation in browser (for development/simple cases only) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        /* Custom font for Inter, matching Tailwind's default */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Helper function to get all possible 5-card combinations from 7 cards
+        const getCombinations = (arr, k) => {
+            const result = [];
+            const f = (prefix, arr, k) => {
+                if (k === 0) {
+                    result.push(prefix);
+                    return;
+                }
+                for (let i = 0; i < arr.length; i++) {
+                    f(prefix.concat(arr[i]), arr.slice(i + 1), k - 1);
+                }
+            };
+            f([], arr, k);
+            return result;
+        };
+
+        // Card representation and parsing
+        const ranks = '23456789TJQKA';
+        const suits = 'CDHS'; // Clubs, Diamonds, Hearts, Spades
+        const suitSymbols = {
+            'C': '♣',
+            'D': '♦',
+            'H': '♥',
+            'S': '♠'
+        };
+        const suitColors = {
+            'C': 'text-gray-900', // Black
+            'S': 'text-gray-900', // Black
+            'D': 'text-red-600',  // Red
+            'H': 'text-red-600'   // Red
+        };
+
+        const parseCard = (cardStr) => {
+            const rank = ranks.indexOf(cardStr[0]); // Numeric rank for easier comparison
+            const suit = cardStr[1];
+            return {
+                rank: rank,
+                suit: suit,
+                originalRank: cardStr[0], // Keep original for display
+            };
+        };
+
+        const getRankString = (numericRank) => {
+            return ranks[numericRank];
+        };
+
+        // Hand evaluation logic
+        const evaluateHand = (fiveCards) => {
+            // Ensure cards are parsed if they come as strings
+            const parsedFiveCards = fiveCards.map(c => typeof c === 'string' ? parseCard(c) : c);
+            const sortedCards = parsedFiveCards.sort((a, b) => a.rank - b.rank);
+
+            const isFlush = new Set(sortedCards.map(c => c.suit)).size === 1;
+
+            let isStraight = true;
+            for (let i = 0; i < sortedCards.length - 1; i++) {
+                if (sortedCards[i + 1].rank !== sortedCards[i].rank + 1) {
+                    isStraight = false;
+                    break;
+                }
+            }
+            // Check for A-5 straight (Ace low)
+            const ranksOnly = sortedCards.map(c => c.rank);
+            const isAceLowStraight = JSON.stringify(ranksOnly) === JSON.stringify([0, 1, 2, 3, 12]); // 2,3,4,5,A
+            if (!isStraight && isAceLowStraight) {
+                isStraight = true;
+            }
+
+            const rankCounts = {};
+            for (const card of sortedCards) {
+                rankCounts[card.rank] = (rankCounts[card.rank] || 0) + 1;
+            }
+
+            const counts = Object.values(rankCounts).sort((a, b) => b - a);
+            const distinctRanks = Object.keys(rankCounts).length;
+
+            // Hand ranking
+            if (isStraight && isFlush) {
+                // Check for Royal Flush (T-J-Q-K-A of same suit)
+                if (sortedCards[0].originalRank === 'T' && sortedCards[4].originalRank === 'A' && !isAceLowStraight) {
+                    return { rank: 9, name: 'Quinte Royale', kicker: sortedCards.map(c => c.rank) };
+                }
+                return { rank: 8, name: 'Quinte Flush', kicker: sortedCards.map(c => c.rank) };
+            }
+            if (counts[0] === 4) {
+                return { rank: 7, name: 'Carré', kicker: sortedCards.filter(c => rankCounts[c.rank] === 4).map(c => c.rank).concat(sortedCards.filter(c => rankCounts[c.rank] !== 4).map(c => c.rank).sort((a,b)=>b-a)) };
+            }
+            if (counts[0] === 3 && counts[1] === 2) {
+                return { rank: 6, name: 'Full House', kicker: sortedCards.filter(c => rankCounts[c.rank] === 3).map(c => c.rank).concat(sortedCards.filter(c => rankCounts[c.rank] === 2).map(c => c.rank)).sort((a,b)=>b-a) };
+            }
+            if (isFlush) {
+                return { rank: 5, name: 'Couleur', kicker: sortedCards.map(c => c.rank).sort((a,b)=>b-a) };
+            }
+            if (isStraight) {
+                return { rank: 4, name: 'Quinte', kicker: sortedCards.map(c => c.rank).sort((a,b)=>b-a) };
+            }
+            if (counts[0] === 3) {
+                return { rank: 3, name: 'Brelan', kicker: sortedCards.filter(c => rankCounts[c.rank] === 3).map(c => c.rank).concat(sortedCards.filter(c => rankCounts[c.rank] !== 3).map(c => c.rank).sort((a,b)=>b-a)) };
+            }
+            if (counts[0] === 2 && counts[1] === 2) {
+                const pairs = sortedCards.filter(c => rankCounts[c.rank] === 2).map(c => c.rank).sort((a,b)=>b-a);
+                const kicker = sortedCards.filter(c => rankCounts[c.rank] === 1).map(c => c.rank).sort((a,b)=>b-a);
+                return { rank: 2, name: 'Double Paire', kicker: pairs.concat(kicker) };
+            }
+            if (counts[0] === 2) {
+                const pair = sortedCards.filter(c => rankCounts[c.rank] === 2).map(c => c.rank);
+                const kickers = sortedCards.filter(c => rankCounts[c.rank] !== 2).map(c => c.rank).sort((a,b)=>b-a);
+                return { rank: 1, name: 'Paire', kicker: pair.concat(kickers) };
+            }
+            return { rank: 0, name: 'Carte Haute', kicker: sortedCards.map(c => c.rank).sort((a,b)=>b-a) };
+        };
+
+        // Compare two hands (used for finding the best of many 5-card hands)
+        const compareHands = (handA, handB) => {
+            if (handA.rank !== handB.rank) {
+                return handA.rank - handB.rank;
+            }
+            // If ranks are same, compare kickers (high card first)
+            for (let i = 0; i < handA.kicker.length; i++) {
+                if (handA.kicker[i] !== handB.kicker[i]) {
+                    return handA.kicker[i] - handB.kicker[i];
+                }
+            }
+            return 0; // Hands are equal
+        };
+
+        // Function to find the best 5-card hand from 7 cards
+        const getBestHand = (sevenCards) => {
+            if (sevenCards.length < 5) return null;
+            const combinations = getCombinations(sevenCards, 5);
+            let currentBestHand = null;
+
+            for (const combo of combinations) {
+                const evaluated = evaluateHand(combo);
+                if (!currentBestHand || compareHands(evaluated, currentBestHand) > 0) {
+                    currentBestHand = evaluated;
+                }
+            }
+            return currentBestHand;
+        };
+
+        // Card Component to display a single card visually
+        const Card = ({ card, onClick, isSelectable = true, isSmall = false }) => {
+            const widthClass = isSmall ? 'w-14 sm:w-16' : 'w-16 sm:w-20';
+            const heightClass = isSmall ? 'h-20 sm:h-24' : 'h-24 sm:h-28';
+            const textSizeClass = isSmall ? 'text-sm sm:text-base' : 'text-lg sm:text-xl';
+            const symbolSizeClass = isSmall ? 'text-3xl sm:text-4xl' : 'text-4xl sm:text-5xl';
+
+            if (!card) {
+                return (
+                    <div
+                        className={`bg-gray-600 rounded-md shadow-inner flex items-center justify-center text-gray-400 ${textSizeClass} cursor-pointer
+                            ${widthClass} ${heightClass} flex-shrink-0 border border-gray-500
+                            ${isSelectable ? 'hover:bg-gray-500 transition duration-200' : ''}`}
+                        onClick={isSelectable ? onClick : null}
+                    >
+                        Vide
+                    </div>
+                );
+            }
+
+            const rank = card[0];
+            const suit = card[1];
+            const colorClass = suitColors[suit];
+            const symbol = suitSymbols[suit];
+
+            return (
+                <div
+                    className={`bg-white rounded-md shadow-lg flex flex-col justify-between p-1 sm:p-2
+                        ${widthClass} ${heightClass} flex-shrink-0 border border-gray-300
+                        ${isSelectable ? 'cursor-pointer hover:scale-105 transition duration-200' : ''}`}
+                    onClick={isSelectable ? onClick : null}
+                >
+                    <div className={`font-bold ${textSizeClass} ${colorClass}`}>{rank}</div>
+                    <div className={`text-center ${symbolSizeClass} ${colorClass}`}>{symbol}</div>
+                    <div className={`font-bold ${textSizeClass} text-right ${colorClass}`}>{rank}</div>
+                </div>
+            );
+        };
+
+        // Card Picker Modal Component
+        const CardPickerModal = ({ availableCards, onSelect, onClose }) => {
+            // Group available cards by suit
+            const cardsBySuit = {
+                'C': [],
+                'D': [],
+                'H': [],
+                'S': []
+            };
+
+            availableCards.forEach(card => {
+                const suit = card[1];
+                if (cardsBySuit[suit]) {
+                    cardsBySuit[suit].push(card);
+                }
+            });
+
+            // Sort cards within each suit by rank (2 to A)
+            for (const suit in cardsBySuit) {
+                cardsBySuit[suit].sort((a, b) => ranks.indexOf(a[0]) - ranks.indexOf(b[0]));
+            }
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-800 rounded-xl shadow-2xl p-6 sm:p-8 max-w-5xl w-full max-h-[90vh] overflow-y-auto relative"> {/* Changed max-w-4xl to max-w-5xl */}
+                        <h2 className="text-2xl font-bold text-yellow-400 text-center mb-6">Sélectionner une Carte</h2>
+                        <button
+                            onClick={onClose}
+                            className="absolute top-4 right-4 bg-red-600 hover:bg-red-700 text-white rounded-full w-8 h-8 flex items-center justify-center text-xl font-bold"
+                        >
+                            &times;
+                        </button>
+                        {Object.keys(cardsBySuit).map(suit => (
+                            <div key={suit} className="mb-6"> {/* Increased margin-bottom for clearer separation */}
+                                <h3 className={`text-xl font-semibold mb-2 ${suitColors[suit]}`}>
+                                    {suitSymbols[suit]} {
+                                        suit === 'C' ? 'Trèfles' :
+                                        suit === 'D' ? 'Carreaux' :
+                                        suit === 'H' ? 'Cœurs' :
+                                        'Piques'
+                                    }
+                                </h3>
+                                {/* Changed grid-cols to explicitly define 13 columns */}
+                                <div className="grid grid-cols-[repeat(13,minmax(56px,1fr))] gap-2 sm:gap-3 justify-items-center">
+                                    {cardsBySuit[suit].map(card => (
+                                        <Card
+                                            key={card}
+                                            card={card}
+                                            onClick={() => onSelect(card)}
+                                            isSelectable={true}
+                                            isSmall={true}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                        {availableCards.length === 0 && (
+                            <p className="text-center text-gray-400 mt-6 text-lg">Toutes les cartes sont déjà sélectionnées !</p>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Main App component
+        const App = () => {
+            const [holeCards, setHoleCards] = React.useState([null, null]);
+            const [communityCards, setCommunityCards] = React.useState([null, null, null, null, null]);
+            const [bestHand, setBestHand] = React.useState(null);
+            const [deck, setDeck] = React.useState([]);
+            const [numOpponents, setNumOpponents] = React.useState(1);
+            const [probabilities, setProbabilities] = React.useState(null);
+            const [potSize, setPotSize] = React.useState('');
+            const [callAmount, setCallAmount] = React.useState('');
+            const [potOdds, setPotOdds] = React.useState(null);
+            const [isCalculating, setIsCalculating] = React.useState(false);
+            const [showCardPicker, setShowCardPicker] = React.useState(false);
+            const [currentCardPickerTarget, setCurrentCardPickerTarget] = React.useState(null); // { type: 'hole'/'community', index: number }
+
+            // Generate a full deck of cards
+            React.useEffect(() => {
+                const newDeck = [];
+                for (const suit of suits) {
+                    for (const rank of ranks) {
+                        newDeck.push(rank + suit);
+                    }
+                }
+                setDeck(newDeck);
+            }, []);
+
+            // Function to get available cards for selection
+            const getAvailableCards = React.useCallback(() => {
+                const selectedCards = [...holeCards, ...communityCards].filter(Boolean);
+                return deck.filter(card => !selectedCards.includes(card));
+            }, [deck, holeCards, communityCards]);
+
+            // Evaluate user's best hand whenever cards change
+            React.useEffect(() => {
+                const allCards = [...holeCards, ...communityCards].filter(Boolean);
+                if (allCards.length >= 2) { // Need at least 2 cards to start evaluating a potential hand
+                    setBestHand(getBestHand(allCards));
+                } else {
+                    setBestHand(null);
+                }
+                setProbabilities(null); // Reset probabilities when cards change
+            }, [holeCards, communityCards]);
+
+            // Handle card selection from the picker modal
+            const handleCardSelection = (selectedCard) => {
+                if (currentCardPickerTarget) {
+                    const { type, index } = currentCardPickerTarget;
+                    if (type === 'hole') {
+                        const newHoleCards = [...holeCards];
+                        newHoleCards[index] = selectedCard;
+                        setHoleCards(newHoleCards);
+                    } else {
+                        const newCommunityCards = [...communityCards];
+                        newCommunityCards[index] = selectedCard;
+                        setCommunityCards(newCommunityCards);
+                    }
+                    setShowCardPicker(false);
+                    setCurrentCardPickerTarget(null);
+                }
+            };
+
+            // Open card picker modal
+            const openCardPicker = (type, index) => {
+                setCurrentCardPickerTarget({ type, index });
+                setShowCardPicker(true);
+            };
+
+            // Reset all cards and calculations
+            const resetCards = () => {
+                setHoleCards([null, null]);
+                setCommunityCards([null, null, null, null, null]);
+                setBestHand(null);
+                setProbabilities(null);
+                setPotSize('');
+                setCallAmount('');
+                setPotOdds(null);
+                setIsCalculating(false);
+                setShowCardPicker(false);
+                setCurrentCardPickerTarget(null);
+            };
+
+            // Calculate Pot Odds
+            React.useEffect(() => {
+                const pot = parseFloat(potSize);
+                const call = parseFloat(callAmount);
+                if (!isNaN(pot) && !isNaN(call) && call > 0) {
+                    setPotOdds(((call / (pot + call)) * 100).toFixed(2));
+                } else {
+                    setPotOdds(null);
+                }
+            }, [potSize, callAmount]);
+
+            // Monte Carlo Simulation for Probabilities
+            const runMonteCarloSimulation = React.useCallback(() => {
+                setIsCalculating(true);
+                setProbabilities(null); // Clear previous results
+
+                const numSimulations = 10000; // Number of simulations for accuracy
+                let wins = 0;
+                let losses = 0;
+                let ties = 0;
+
+                const playerHoleCards = holeCards.filter(Boolean);
+                const boardCards = communityCards.filter(Boolean);
+
+                // Check for minimum cards to run simulation
+                if (playerHoleCards.length < 2) {
+                    // Using a custom message instead of alert
+                    console.error("Veuillez sélectionner vos deux cartes fermées pour calculer les probabilités.");
+                    setProbabilities({ win: 'N/A', loss: 'N/A', tie: 'N/A', error: "Sélectionnez vos 2 cartes fermées." });
+                    setIsCalculating(false);
+                    return;
+                }
+
+                // Create a deck excluding player's cards and community cards
+                const usedCards = new Set([...playerHoleCards, ...boardCards]);
+                const remainingDeck = deck.filter(card => !usedCards.has(card));
+
+                // Simulate
+                for (let i = 0; i < numSimulations; i++) {
+                    let tempRemainingDeck = [...remainingDeck];
+                    // Shuffle the temporary remaining deck
+                    for (let j = tempRemainingDeck.length - 1; j > 0; j--) {
+                        const k = Math.floor(Math.random() * (j + 1));
+                        [tempRemainingDeck[j], tempRemainingDeck[k]] = [tempRemainingDeck[k], tempRemainingDeck[j]];
+                    }
+
+                    let currentBoard = [...boardCards];
+                    let deckIndex = 0;
+
+                    // Deal remaining community cards if needed
+                    while (currentBoard.length < 5) {
+                        currentBoard.push(tempRemainingDeck[deckIndex++]);
+                    }
+
+                    // Deal opponent hole cards
+                    const opponentHands = [];
+                    for (let op = 0; op < numOpponents; op++) {
+                        opponentHands.push([tempRemainingDeck[deckIndex++], tempRemainingDeck[deckIndex++]]);
+                    }
+
+                    // Evaluate player's best hand
+                    const playerSevenCards = [...playerHoleCards, ...currentBoard];
+                    const playerBestHand = getBestHand(playerSevenCards);
+
+                    if (!playerBestHand) {
+                        // This should not happen if playerHoleCards has 2 cards
+                        continue;
+                    }
+
+                    let playerWinsThisSim = true;
+                    let playerTiesThisSim = false;
+
+                    for (const oppHand of opponentHands) {
+                        const opponentSevenCards = [...oppHand, ...currentBoard];
+                        const opponentBestHand = getBestHand(opponentSevenCards);
+
+                        if (!opponentBestHand) {
+                            // This case means opponent couldn't form a 5-card hand, which shouldn't happen with 7 cards
+                            // But if it did, player would win. For robustness, assuming opponent always gets a hand.
+                            continue;
+                        }
+
+                        const comparison = compareHands(playerBestHand, opponentBestHand);
+
+                        if (comparison < 0) { // Player's hand is worse than opponent's
+                            playerWinsThisSim = false;
+                            playerTiesThisSim = false; // If one opponent beats, it's a loss
+                            break;
+                        } else if (comparison === 0) { // Player's hand is equal to opponent's
+                            playerTiesThisSim = true;
+                        }
+                    }
+
+                    if (playerWinsThisSim && !playerTiesThisSim) {
+                        wins++;
+                    } else if (playerTiesThisSim) {
+                        ties++;
+                    } else {
+                        losses++;
+                    }
+                }
+
+                setProbabilities({
+                    win: ((wins / numSimulations) * 100).toFixed(2),
+                    loss: ((losses / numSimulations) * 100).toFixed(2),
+                    tie: ((ties / numSimulations) * 100).toFixed(2),
+                });
+                setIsCalculating(false);
+            }, [holeCards, communityCards, numOpponents, deck]);
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-green-700 to-green-900 text-white font-inter p-4 sm:p-8 flex flex-col items-center justify-center">
+                    <div className="bg-gray-800 p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-4xl border border-gray-700">
+                        <h1 className="text-3xl sm:text-4xl font-bold text-center mb-6 text-yellow-400">
+                            Outil d'Analyse de Poker
+                        </h1>
+
+                        {/* Section: Vos Cartes */}
+                        <div className="mb-8 p-4 bg-gray-700 rounded-lg shadow-inner">
+                            <h2 className="text-xl sm:text-2xl font-semibold mb-4 text-center text-yellow-300">Vos Cartes</h2>
+                            <div className="flex justify-center space-x-4 mb-6">
+                                {holeCards.map((card, index) => (
+                                    <Card
+                                        key={`hole-${index}`}
+                                        card={card}
+                                        onClick={() => openCardPicker('hole', index)}
+                                        isSelectable={true}
+                                    />
+                                ))}
+                            </div>
+
+                            <h2 className="text-xl sm:text-2xl font-semibold mb-4 text-center text-yellow-300">Cartes Communes (Table)</h2>
+                            <div className="flex flex-wrap justify-center gap-4">
+                                {communityCards.map((card, index) => (
+                                    <Card
+                                        key={`community-${index}`}
+                                        card={card}
+                                        onClick={() => openCardPicker('community', index)}
+                                        isSelectable={true}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Section: Meilleure Main */}
+                        {bestHand && (
+                            <div className="bg-gray-700 p-6 rounded-lg shadow-inner border border-gray-600 mb-8">
+                                <h2 className="text-2xl sm:text-3xl font-bold text-yellow-300 text-center mb-4">
+                                    Meilleure Main :
+                                </h2>
+                                <p className="text-3xl sm:text-4xl font-extrabold text-center text-white">
+                                    {bestHand.name}
+                                </p>
+                                <p className="text-lg sm:text-xl text-center text-gray-300 mt-2">
+                                    (Cartes : {bestHand.kicker.map(getRankString).join(', ')})
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Section: Probabilités de Gain */}
+                        <div className="mb-8 p-4 bg-gray-700 rounded-lg shadow-inner">
+                            <h2 className="text-xl sm:text-2xl font-semibold mb-4 text-center text-yellow-300">Probabilités de Gain</h2>
+                            <div className="flex justify-center items-center mb-4 space-x-4">
+                                <label htmlFor="numOpponents" className="text-lg">Nombre d'adversaires :</label>
+                                <input
+                                    type="number"
+                                    id="numOpponents"
+                                    min="1"
+                                    max="9"
+                                    value={numOpponents}
+                                    onChange={(e) => setNumOpponents(parseInt(e.target.value))}
+                                    className="bg-gray-600 text-white p-2 rounded-md w-20 text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                            </div>
+                            <div className="text-center">
+                                <button
+                                    onClick={runMonteCarloSimulation}
+                                    disabled={holeCards.filter(Boolean).length < 2 || isCalculating}
+                                    className={`py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 ${
+                                        holeCards.filter(Boolean).length < 2 || isCalculating
+                                            ? 'bg-gray-500 cursor-not-allowed'
+                                            : 'bg-blue-600 hover:bg-blue-700'
+                                    } text-white font-bold`}
+                                >
+                                    {isCalculating ? 'Calcul en cours...' : 'Calculer les Probabilités'}
+                                </button>
+                            </div>
+
+                            {isCalculating && (
+                                <p className="text-center text-yellow-300 mt-4 text-lg">
+                                    Simulation en cours, cela peut prendre quelques instants...
+                                </p>
+                            )}
+
+                            {probabilities && !isCalculating && (
+                                <div className="mt-6 text-center">
+                                    {probabilities.error ? (
+                                        <p className="text-red-400 text-lg">{probabilities.error}</p>
+                                    ) : (
+                                        <>
+                                            <p className="text-xl sm:text-2xl font-bold text-white mb-2">
+                                                Victoire : <span className="text-green-400">{probabilities.win}%</span>
+                                            </p>
+                                            <p className="text-xl sm:text-2xl font-bold text-white mb-2">
+                                                Égalité : <span className="text-yellow-400">{probabilities.tie}%</span>
+                                            </p>
+                                            <p className="text-xl sm:text-2xl font-bold text-white">
+                                                Défaite : <span className="text-red-400">{probabilities.loss}%</span>
+                                            </p>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Section: Cotes du Pot */}
+                        <div className="mb-8 p-4 bg-gray-700 rounded-lg shadow-inner">
+                            <h2 className="text-xl sm:text-2xl font-semibold mb-4 text-center text-yellow-300">Calcul des Cotes du Pot</h2>
+                            <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mb-4">
+                                <div className="flex items-center space-x-2">
+                                    <label htmlFor="potSize" className="text-lg">Pot actuel :</label>
+                                    <input
+                                        type="number"
+                                        id="potSize"
+                                        value={potSize}
+                                        onChange={(e) => setPotSize(e.target.value)}
+                                        className="bg-gray-600 text-white p-2 rounded-md w-28 text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        placeholder="Ex: 100"
+                                        min="0"
+                                    />
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <label htmlFor="callAmount" className="text-lg">Mise à égaliser :</label>
+                                    <input
+                                        type="number"
+                                        id="callAmount"
+                                        value={callAmount}
+                                        onChange={(e) => setCallAmount(e.target.value)}
+                                        className="bg-gray-600 text-white p-2 rounded-md w-28 text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        placeholder="Ex: 20"
+                                        min="0"
+                                    />
+                                </div>
+                            </div>
+                            {potOdds !== null && (
+                                <p className="text-center text-xl sm:text-2xl font-bold text-white">
+                                    Cotes du Pot : <span className="text-purple-400">{potOdds}%</span>
+                                </p>
+                            )}
+                            {potOdds === null && potSize && callAmount && (
+                                <p className="text-center text-gray-400">
+                                    Entrez des valeurs valides pour calculer les cotes du pot.
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="text-center mt-4">
+                            <button
+                                onClick={resetCards}
+                                className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-75"
+                            >
+                                Réinitialiser Tout
+                            </button>
+                        </div>
+                    </div>
+
+                    {showCardPicker && (
+                        <CardPickerModal
+                            availableCards={getAvailableCards()}
+                            onSelect={handleCardSelection}
+                            onClose={() => setShowCardPicker(false)}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        // Render the React App component into the 'root' div
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
